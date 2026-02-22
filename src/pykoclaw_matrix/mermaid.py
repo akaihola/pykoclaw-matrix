@@ -13,7 +13,7 @@ import re
 log = logging.getLogger(__name__)
 
 # Matches fenced ```mermaid ... ``` blocks.  Captures the diagram source.
-_MERMAID_BLOCK_RE = re.compile(
+MERMAID_BLOCK_RE = re.compile(
     r"```mermaid\s*\n(.*?)```",
     re.DOTALL,
 )
@@ -21,7 +21,7 @@ _MERMAID_BLOCK_RE = re.compile(
 
 def extract_mermaid_blocks(text: str) -> list[str]:
     """Return all Mermaid diagram sources from fenced code blocks in *text*."""
-    return [m.group(1).strip() for m in _MERMAID_BLOCK_RE.finditer(text)]
+    return [m.group(1).strip() for m in MERMAID_BLOCK_RE.finditer(text)]
 
 
 def strip_mermaid_blocks(text: str) -> str:
@@ -30,7 +30,7 @@ def strip_mermaid_blocks(text: str) -> str:
     The surrounding text is preserved; consecutive blank lines left by removal
     are collapsed to a single blank line.
     """
-    result = _MERMAID_BLOCK_RE.sub("", text)
+    result = MERMAID_BLOCK_RE.sub("", text)
     # Collapse runs of 3+ newlines into 2 (one blank line).
     return re.sub(r"\n{3,}", "\n\n", result).strip()
 

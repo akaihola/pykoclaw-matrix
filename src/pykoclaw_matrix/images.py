@@ -14,7 +14,7 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 # Image extensions we support uploading.
-_IMAGE_EXTENSIONS = frozenset(
+IMAGE_EXTENSIONS = frozenset(
     {
         ".png",
         ".jpg",
@@ -30,7 +30,7 @@ _IMAGE_EXTENSIONS = frozenset(
 # Matches absolute file paths (starting with /) that end in an image
 # extension.  Paths may be bare, wrapped in backticks, or in quotes.
 # We capture the raw path.
-_IMAGE_PATH_RE = re.compile(
+IMAGE_PATH_RE = re.compile(
     r"(?:`|\"|\')?"  # optional opening backtick / quote
     r"(/[\w./_-]+)"  # absolute path (letters, digits, dots, slashes, hyphens, underscores)
     r"(?:`|\"|\')?"  # optional closing backtick / quote
@@ -45,13 +45,13 @@ def detect_image_paths(text: str) -> list[Path]:
     """
     seen: set[str] = set()
     result: list[Path] = []
-    for m in _IMAGE_PATH_RE.finditer(text):
+    for m in IMAGE_PATH_RE.finditer(text):
         raw = m.group(1)
         if raw in seen:
             continue
         seen.add(raw)
         p = Path(raw)
-        if p.suffix.lower() in _IMAGE_EXTENSIONS and p.is_file():
+        if p.suffix.lower() in IMAGE_EXTENSIONS and p.is_file():
             log.info("Detected image file: %s", p)
             result.append(p)
     return result
