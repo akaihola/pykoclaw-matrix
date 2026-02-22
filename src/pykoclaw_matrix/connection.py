@@ -21,6 +21,7 @@ from nio import (
     MatrixRoom,
     MegolmEvent,
     RoomMessageText,
+    UploadResponse,
 )
 
 from pykoclaw.config import settings as core_settings
@@ -34,6 +35,7 @@ from pykoclaw_messaging import dispatch_to_agent
 
 from .config import MatrixSettings, get_config
 from .formatting import build_matrix_content
+from .mermaid import extract_mermaid_blocks, render_mermaid_png, strip_mermaid_blocks
 from .handler import (
     BatchAccumulator,
     _is_hard_mention,
@@ -370,9 +372,10 @@ class MatrixConnection:
     async def _send_message(self, room_id: str, text: str) -> None:
         """Send a formatted message to a Matrix room.
 
-        Converts the Markdown *text* to HTML and sends both plain-text
-        (``body``) and rich (``formatted_body``) versions so that clients
-        like Element render bold, code blocks, links, etc.
+        If *text* contains `````mermaid````` code blocks, each diagram is
+        rendered to PNG, uploaded to the homeserver, and sent as a separate
+        ``m.image`` message after the text.  The Mermaid source is stripped
+        from the text message itself.
 
         Uses ``ignore_unverified_devices=True`` so that the bot can send
         to E2EE rooms without requiring manual device verification.
@@ -381,15 +384,64 @@ class MatrixConnection:
             log.warning("Cannot send message — client not connected")
             return
         try:
-            content = build_matrix_content(text)
+            # Extract and render Mermaid diagrams (if any).
+            mermaid_sources = extract_mermaid_blocks(text)
+            rendered_images: list[bytes] = []
+            if mermaid_sources:
+                for src in mermaid_sources:
+                    png = await render_mermaid_png(src)
+                    if png:
+                        rendered_images.append(png)
+
+            # Send the text (with mermaid blocks stripped if we rendered them).
+            msg_text = strip_mermaid_blocks(text) if rendered_images else text
+            if msg_text:
+                content = build_matrix_content(msg_text)
+                await self._client.room_send(
+                    room_id,
+                    "m.room.message",
+                    content,
+                    ignore_unverified_devices=True,
+                )
+
+            # Upload and send each rendered diagram as m.image.
+            for i, png_data in enumerate(rendered_images, 1):
+                await self._send_image(room_id, png_data, f"diagram-{i}.png")
+        except Exception:
+            log.exception("Failed to send message to %s", room_id)
+
+    async def _send_image(self, room_id: str, data: bytes, filename: str) -> None:
+        """Upload *data* to the homeserver and send as ``m.image``."""
+        if not self._client:
+            return
+        try:
+            resp, _crypto = await self._client.upload(
+                data,
+                content_type="image/png",
+                filename=filename,
+            )
+            if not isinstance(resp, UploadResponse):
+                log.error("Image upload failed: %s", resp)
+                return
+
+            content = {
+                "msgtype": "m.image",
+                "body": filename,
+                "url": resp.content_uri,
+                "info": {
+                    "mimetype": "image/png",
+                    "size": len(data),
+                },
+            }
             await self._client.room_send(
                 room_id,
                 "m.room.message",
                 content,
                 ignore_unverified_devices=True,
             )
+            log.info("Sent image %s to %s (%s)", filename, room_id, resp.content_uri)
         except Exception:
-            log.exception("Failed to send message to %s", room_id)
+            log.exception("Failed to send image to %s", room_id)
 
     async def _delivery_poll_loop(self) -> None:
         """Poll and deliver scheduled task results to Matrix rooms."""
