@@ -289,15 +289,38 @@ class MatrixConnection:
                 f"Decide whether to reply, use tools silently, or do nothing."
             )
 
-            result = await dispatch_to_agent(
-                prompt=prompt,
-                channel_prefix="matrix",
-                channel_id=room_id,
-                db=self._db,
-                data_dir=core_settings.data,
-                system_prompt=system_prompt,
-                extra_mcp_servers=self._extra_mcp_servers,
-            )
+            try:
+                result = await dispatch_to_agent(
+                    prompt=prompt,
+                    channel_prefix="matrix",
+                    channel_id=room_id,
+                    db=self._db,
+                    data_dir=core_settings.data,
+                    system_prompt=system_prompt,
+                    extra_mcp_servers=self._extra_mcp_servers,
+                )
+            except Exception:
+                # Session resume can fail if the previous session state is
+                # corrupt or missing.  Clear the conversation and retry
+                # without resuming.
+                log.warning(
+                    "Agent dispatch failed for %s, retrying without session resume",
+                    room_id,
+                )
+                from pykoclaw.db import upsert_conversation
+
+                conv_name = f"matrix-{room_id}"
+                upsert_conversation(self._db, conv_name, "", str(core_settings.data))
+
+                result = await dispatch_to_agent(
+                    prompt=prompt,
+                    channel_prefix="matrix",
+                    channel_id=room_id,
+                    db=self._db,
+                    data_dir=core_settings.data,
+                    system_prompt=system_prompt,
+                    extra_mcp_servers=self._extra_mcp_servers,
+                )
 
             extracted = _extract_reply(result.full_text)
             if extracted:
