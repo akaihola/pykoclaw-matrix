@@ -155,6 +155,29 @@ def test_get_new_messages_no_cursor(db: sqlite3.Connection) -> None:
     assert len(messages) == 2
 
 
+def test_get_new_messages_includes_agent_replies(db: sqlite3.Connection) -> None:
+    """Test that agent (is_from_me) messages are included in new messages.
+
+    After a session resume failure, agent responses stored locally are the
+    only source of conversation context — they MUST appear in the XML batch.
+    """
+    store_message(
+        db, "!abc123:matrix.org", "Alice", "Hello", "2024-01-01T12:00:00Z", False
+    )
+    store_message(
+        db, "!abc123:matrix.org", "Tyko", "Hi Alice!", "2024-01-01T12:00:05Z", True
+    )
+    store_message(
+        db, "!abc123:matrix.org", "Alice", "How are you?", "2024-01-01T12:01:00Z", False
+    )
+
+    messages = get_new_messages_for_room(db, "!abc123:matrix.org")
+
+    assert len(messages) == 3
+    senders = [m[0] for m in messages]
+    assert "Tyko" in senders
+
+
 def test_is_hard_mention() -> None:
     """Test hard mention detection."""
     assert _is_hard_mention("@Andy", "Andy")

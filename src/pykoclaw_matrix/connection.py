@@ -332,6 +332,21 @@ class MatrixConnection:
             extracted = _extract_reply(result.full_text)
             if extracted:
                 await self._send_message(room_id, extracted)
+
+                # Store the agent's response locally so it survives session
+                # resume failures.  Without this, a failed resume loses all
+                # prior agent replies and the XML context only contains human
+                # messages.
+                now = datetime.now(timezone.utc).isoformat()
+                store_message(
+                    self._db,
+                    room_id=room_id,
+                    sender=self._config.trigger_name,
+                    text=extracted,
+                    timestamp=now,
+                    is_from_me=True,
+                )
+
                 log.info("Agent response sent to %s", room_id)
             else:
                 log.info("Agent chose silence for %s", room_id)
