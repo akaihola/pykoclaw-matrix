@@ -42,6 +42,31 @@ class MatrixPlugin(PykoClawPluginBase):
             from .config import get_config
 
             mx_config = get_config()
+
+            if not mx_config.user_id:
+                click.echo("✗ PYKOCLAW_MATRIX_USER_ID is not set.", err=True)
+                click.echo(
+                    "  Run 'pykoclaw matrix login' to get credentials,",
+                    err=True,
+                )
+                click.echo(
+                    "  then add them to your .env file.",
+                    err=True,
+                )
+                raise SystemExit(1)
+
+            if not mx_config.access_token and not mx_config.password:
+                click.echo(
+                    "✗ No credentials configured. Set "
+                    "PYKOCLAW_MATRIX_ACCESS_TOKEN or PYKOCLAW_MATRIX_PASSWORD.",
+                    err=True,
+                )
+                click.echo(
+                    "  Run 'pykoclaw matrix login' to get an access token.",
+                    err=True,
+                )
+                raise SystemExit(1)
+
             click.echo(f"Data directory: {settings.data}")
             click.echo(f"Homeserver:     {mx_config.homeserver}")
             click.echo(f"User ID:        {mx_config.user_id}")
