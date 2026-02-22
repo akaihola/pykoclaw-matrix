@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import sqlite3
 from textwrap import dedent
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from nio import UploadResponse
 
 from pykoclaw_matrix.connection import MatrixConnection, _extract_reply
 from pykoclaw_matrix.handler import get_new_messages_for_room
@@ -181,3 +183,46 @@ async def test_agent_reply_appears_in_next_batch(matrix_db: sqlite3.Connection) 
     assert "Tyko" in senders, "Agent reply missing from next batch context"
     assert "Hi!" in texts
     assert "How are you?" in texts
+
+
+# -- _send_image uploads with correct type ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_image_passes_bytesio_to_upload() -> None:
+    """client.upload() requires a file-like object, not raw bytes."""
+    fake_upload_resp = UploadResponse.from_dict(
+        {"content_uri": "mxc://example.com/abc123"}
+    )
+
+    conn = MatrixConnection.__new__(MatrixConnection)
+    conn._client = AsyncMock()
+    conn._client.upload = AsyncMock(return_value=(fake_upload_resp, None))
+    conn._client.room_send = AsyncMock()
+
+    png_data = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+
+    await conn._send_image("!room:test", png_data, "diagram.png", "image/png")
+
+    # Verify upload was called
+    conn._client.upload.assert_called_once()
+    call_args = conn._client.upload.call_args
+
+    # The first positional arg must be a BytesIO, not raw bytes
+    data_arg = call_args[0][0]
+    assert isinstance(data_arg, io.BytesIO), (
+        f"upload() received {type(data_arg).__name__}, expected BytesIO"
+    )
+    assert data_arg.read() == png_data
+
+    # filesize must be passed
+    assert call_args[1]["filesize"] == len(png_data)
+
+    # room_send must have been called with m.image content
+    conn._client.room_send.assert_called_once()
+    send_args = conn._client.room_send.call_args
+    assert send_args[0][1] == "m.room.message"
+    content = send_args[0][2]
+    assert content["msgtype"] == "m.image"
+    assert content["url"] == "mxc://example.com/abc123"
+    assert content["info"]["size"] == len(png_data)
