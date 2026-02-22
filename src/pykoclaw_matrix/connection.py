@@ -15,9 +15,11 @@ from typing import Any
 
 from nio import (
     AsyncClient,
+    ClientConfig,
     InviteMemberEvent,
     LoginError,
     MatrixRoom,
+    MegolmEvent,
     RoomMessageText,
 )
 
@@ -87,15 +89,20 @@ class MatrixConnection:
         self._sync_start_time: str = ""
 
     async def _login(self) -> AsyncClient:
-        """Create and authenticate the Matrix client."""
+        """Create and authenticate the Matrix client.
+
+        Initialises the crypto store so that E2EE rooms work out of the box.
+        On first run, device keys are uploaded to the homeserver.
+        """
         cfg = self._config
         cfg.store_path.mkdir(parents=True, exist_ok=True)
 
+        nio_config = ClientConfig(store_sync_tokens=True)
         client = AsyncClient(
             cfg.homeserver,
             cfg.user_id,
             store_path=str(cfg.store_path),
-            config=None,
+            config=nio_config,
         )
 
         if cfg.device_id:
@@ -124,6 +131,17 @@ class MatrixConnection:
             raise RuntimeError(msg)
 
         self._self_user_id = client.user_id
+
+        # Initialise the Olm crypto store for E2EE support.
+        client.load_store()
+        log.info("Crypto store loaded (olm=%s)", client.olm is not None)
+
+        # Upload device keys on first run so other clients can encrypt for us.
+        if client.should_upload_keys:
+            log.info("Uploading device keys...")
+            resp = await client.keys_upload()
+            log.info("Keys upload: %s", type(resp).__name__)
+
         return client
 
     def _register_callbacks(self, client: AsyncClient) -> None:
@@ -141,8 +159,19 @@ class MatrixConnection:
             log.info("Auto-joining room %s", room.room_id)
             await client.join(room.room_id)
 
+        async def on_megolm(room: MatrixRoom, event: MegolmEvent) -> None:
+            log.warning(
+                "Unable to decrypt message in %s from %s "
+                "(session_id=%s). The sender's client may need to "
+                "re-send, or verify this device.",
+                room.room_id,
+                event.sender,
+                event.session_id[:20] if event.session_id else "?",
+            )
+
         client.add_event_callback(on_message, RoomMessageText)
         client.add_event_callback(on_invite, InviteMemberEvent)
+        client.add_event_callback(on_megolm, MegolmEvent)
 
     async def _handle_message(self, room: MatrixRoom, event: RoomMessageText) -> None:
         """Process an incoming room message."""
@@ -284,7 +313,11 @@ class MatrixConnection:
             log.exception("Error in agent trigger for %s", room_id)
 
     async def _send_message(self, room_id: str, text: str) -> None:
-        """Send a text message to a Matrix room."""
+        """Send a text message to a Matrix room.
+
+        Uses ``ignore_unverified_devices=True`` so that the bot can send
+        to E2EE rooms without requiring manual device verification.
+        """
         if not self._client:
             log.warning("Cannot send message — client not connected")
             return
@@ -293,6 +326,7 @@ class MatrixConnection:
                 room_id,
                 "m.room.message",
                 {"msgtype": "m.text", "body": text},
+                ignore_unverified_devices=True,
             )
         except Exception:
             log.exception("Failed to send message to %s", room_id)
