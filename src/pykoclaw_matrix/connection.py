@@ -7,9 +7,11 @@ agent trigger pipeline. Modeled after pykoclaw-whatsapp's WhatsAppConnection.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -396,8 +398,6 @@ class MatrixConnection:
         2. **File references** — absolute paths to image files (PNG, JPEG,
            etc.) are read from disk, uploaded, and sent as ``m.image``.
         """
-        from pathlib import Path
-
         if not self._client:
             log.warning("Cannot send message — client not connected")
             return
@@ -448,8 +448,6 @@ class MatrixConnection:
         if not self._client:
             return
         try:
-            import io
-
             resp, _crypto = await self._client.upload(
                 io.BytesIO(data),
                 content_type=content_type,

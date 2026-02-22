@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from .images import _IMAGE_EXTENSIONS, _IMAGE_PATH_RE
-from .mermaid import _MERMAID_BLOCK_RE
+from .images import IMAGE_EXTENSIONS, IMAGE_PATH_RE
+from .mermaid import MERMAID_BLOCK_RE
 
 log = logging.getLogger(__name__)
 
@@ -58,13 +58,13 @@ def split_segments(text: str) -> list[Segment]:
     # Collect all "image markers" with their span in the original text.
     markers: list[tuple[int, int, ImageRef]] = []
 
-    for m in _MERMAID_BLOCK_RE.finditer(text):
+    for m in MERMAID_BLOCK_RE.finditer(text):
         markers.append((m.start(), m.end(), ImageRef("mermaid", m.group(1).strip())))
 
-    for m in _IMAGE_PATH_RE.finditer(text):
+    for m in IMAGE_PATH_RE.finditer(text):
         raw = m.group(1)
         p = Path(raw)
-        if p.suffix.lower() in _IMAGE_EXTENSIONS and p.is_file():
+        if p.suffix.lower() in IMAGE_EXTENSIONS and p.is_file():
             markers.append((m.start(), m.end(), ImageRef("file", raw)))
 
     # Sort by position in the text.
