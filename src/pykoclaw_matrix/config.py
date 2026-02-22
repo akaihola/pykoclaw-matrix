@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+_DEFAULT_DATA = Path.home() / ".local" / "share" / "pykoclaw"
+
+
+def _resolve_data_dir() -> Path:
+    """Resolve the pykoclaw data directory from ``PYKOCLAW_DATA`` env var."""
+    return Path(os.environ.get("PYKOCLAW_DATA", str(_DEFAULT_DATA)))
 
 
 class MatrixSettings(BaseSettings):
     """Matrix plugin configuration.
 
     All settings can be set via environment variables with the
-    ``PYKOCLAW_MATRIX_`` prefix, or via ``.env`` file.
+    ``PYKOCLAW_MATRIX_`` prefix, or via ``.env`` file located in the
+    pykoclaw data directory (``PYKOCLAW_DATA``) or the current working
+    directory.
     """
 
     homeserver: str = Field(default="https://matrix.org")
@@ -22,7 +32,7 @@ class MatrixSettings(BaseSettings):
     device_name: str = Field(default="pykoclaw")
     device_id: str = Field(default="")
     store_path: Path = Field(
-        default=Path.home() / ".local" / "share" / "pykoclaw" / "matrix" / "store"
+        default_factory=lambda: _resolve_data_dir() / "matrix" / "store"
     )
     trigger_name: str = Field(default="Andy")
     batch_window_seconds: int = Field(default=90)
@@ -31,7 +41,8 @@ class MatrixSettings(BaseSettings):
     model_config = {
         "env_prefix": "PYKOCLAW_MATRIX_",
         "env_file": (
-            str(Path.home() / ".local" / "share" / "pykoclaw" / ".env"),
+            str(_resolve_data_dir() / ".env"),
+            str(_DEFAULT_DATA / ".env"),
             ".env",
         ),
         "env_file_encoding": "utf-8",
