@@ -33,6 +33,7 @@ from pykoclaw.db import (
 from pykoclaw_messaging import dispatch_to_agent
 
 from .config import MatrixSettings, get_config
+from .formatting import build_matrix_content
 from .handler import (
     BatchAccumulator,
     _is_hard_mention,
@@ -378,7 +379,11 @@ class MatrixConnection:
             log.debug("Failed to send typing indicator to %s", room_id)
 
     async def _send_message(self, room_id: str, text: str) -> None:
-        """Send a text message to a Matrix room.
+        """Send a formatted message to a Matrix room.
+
+        Converts the Markdown *text* to HTML and sends both plain-text
+        (``body``) and rich (``formatted_body``) versions so that clients
+        like Element render bold, code blocks, links, etc.
 
         Uses ``ignore_unverified_devices=True`` so that the bot can send
         to E2EE rooms without requiring manual device verification.
@@ -387,10 +392,11 @@ class MatrixConnection:
             log.warning("Cannot send message — client not connected")
             return
         try:
+            content = build_matrix_content(text)
             await self._client.room_send(
                 room_id,
                 "m.room.message",
-                {"msgtype": "m.text", "body": text},
+                content,
                 ignore_unverified_devices=True,
             )
         except Exception:

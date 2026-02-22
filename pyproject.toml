@@ -3,7 +3,7 @@ name = "pykoclaw-matrix"
 version = "0.1.0"
 description = "Matrix/Element plugin for pykoclaw"
 requires-python = ">=3.12"
-dependencies = ["pykoclaw", "pykoclaw-messaging", "matrix-nio[e2e]>=0.25.2", "click", "canonicaljson>=2.0.0", "httpx"]
+dependencies = ["pykoclaw", "pykoclaw-messaging", "matrix-nio[e2e]>=0.25.2", "click", "canonicaljson>=2.0.0", "httpx", "markdown-it-py>=3.0", "mdit-py-plugins>=0.4", "linkify-it-py>=2.0"]
 
 [tool.uv.sources]
 pykoclaw = { workspace = true }
