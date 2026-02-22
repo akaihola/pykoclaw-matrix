@@ -9,6 +9,17 @@ agent to Matrix rooms via the [matrix-nio][nio] library.
   libolm/matrix-nio.
 - **Ambient listening** — the agent monitors Matrix rooms and only replies when
   directly mentioned or in DMs.
+- **Rich formatting** — agent Markdown is converted to Matrix HTML
+  (`org.matrix.custom.html`) for bold, italic, code blocks, tables,
+  strikethrough, blockquotes, lists, and auto-linked URLs.
+- **Mermaid diagrams** — `` ```mermaid `` `` code blocks are rendered to hi-res
+  PNG images (2× device scale) and sent as `m.image` events inline.
+- **Image file uploads** — absolute paths to image files (PNG, JPEG, GIF, WebP,
+  etc.) in agent responses are automatically read from disk and sent as
+  `m.image` events at the correct position in the conversation.
+- **Task list rendering** — `- [x]` / `- [ ]` task lists render as ✅ / ⬛
+  emoji checkboxes on `<br>`-separated lines (Element strips `<input>`
+  elements). Nested task lists are indented with Braille blanks.
 - **Typing indicator** — shows "user is typing…" in Element while the agent
   processes a message.
 - **Batch accumulation** — groups rapid messages into a single agent prompt
@@ -80,6 +91,13 @@ All settings use the `PYKOCLAW_MATRIX_` env prefix:
 | `BATCH_WINDOW_SECONDS` | `90` | Batch accumulation window |
 | `AUTO_JOIN` | `true` | Auto-join rooms when invited |
 
+## Prerequisites
+
+Mermaid diagram rendering requires [Playwright][playwright] with Chromium. On
+NixOS / the production service this is handled via `nix-shell -p chromium`;
+elsewhere, ensure Chromium is available on `$PATH` or set
+`$PLAYWRIGHT_BROWSERS_PATH`.
+
 ## Architecture
 
 The plugin follows the same patterns as [pykoclaw-whatsapp][wa]:
@@ -87,11 +105,22 @@ The plugin follows the same patterns as [pykoclaw-whatsapp][wa]:
 - **`MatrixPlugin`** — entry point registered via `pykoclaw.plugins`. Registers
   CLI commands, DB migrations, config class, and MCP tools.
 - **`MatrixConnection`** — manages the matrix-nio `AsyncClient` lifecycle,
-  event callbacks, sync loop, and delivery polling.
+  event callbacks, sync loop, and delivery polling. Outgoing messages are split
+  into interleaved text and image segments so that images appear inline.
 - **`BatchAccumulator`** — per-room timer-based batch accumulation with
   immediate flush on hard mentions / DMs.
 - **`handler`** module — message storage, XML formatting, mention detection,
   cursor tracking.
+- **`formatting`** module — Markdown → Matrix HTML conversion via
+  [markdown-it-py][mipy] with GFM table, strikethrough, linkify, and task list
+  support.
+- **`mermaid`** module — extracts `` ```mermaid `` `` code blocks and renders
+  them to PNG via [mermaid-cli][mcli] (Playwright + Chromium).
+- **`images`** module — detects absolute image file paths in agent text,
+  verifies they exist on disk, and provides MIME type helpers.
+- **`segments`** module — splits agent text into ordered `TextSegment` /
+  `ImageSegment` entries so the caller can send them as separate Matrix
+  messages in document order.
 
 All agent dispatch goes through `pykoclaw-messaging`'s `dispatch_to_agent()`.
 Conversations are named `matrix-{room_id}`.
@@ -104,3 +133,6 @@ Conversations are named `matrix-{room_id}`.
 [pykoclaw]: ../pykoclaw/
 [nio]: https://github.com/poljar/matrix-nio
 [wa]: ../pykoclaw-whatsapp/
+[playwright]: https://playwright.dev/python/
+[mipy]: https://github.com/executablebooks/markdown-it-py
+[mcli]: https://pypi.org/project/mermaid-cli/
