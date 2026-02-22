@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import os
 from textwrap import dedent
-from typing import Any
+from typing import TYPE_CHECKING, Any, Callable
 
 import click
 from pydantic_settings import BaseSettings
@@ -12,6 +13,148 @@ from pykoclaw.db import DbConnection
 from pykoclaw.plugins import PykoClawPluginBase
 
 from .config import MatrixSettings
+
+if TYPE_CHECKING:
+    from .config import MatrixSettings as _MatrixSettings
+
+
+def _bootstrap_cross_signing(
+    mx: _MatrixSettings, encode_canonical_json: Callable[[dict], bytes]
+) -> None:
+    """Reset cross-signing keys and sign the current device.
+
+    This removes the red "unverified device" warning in Element by
+    making the bot's account vouch for its own device via cross-signing.
+    """
+    import olm.pk
+
+    import httpx
+
+    master = olm.pk.PkSigning(os.urandom(32))
+    self_signing = olm.pk.PkSigning(os.urandom(32))
+    user_signing = olm.pk.PkSigning(os.urandom(32))
+
+    click.echo(
+        f"Generated new cross-signing keys (master: {master.public_key[:16]}...)"
+    )
+
+    def _sign(signing_key: Any, obj: dict, uid: str, key_id: str) -> dict:
+        stripped = {k: v for k, v in obj.items() if k not in ("signatures", "unsigned")}
+        sig = signing_key.sign(encode_canonical_json(stripped))
+        obj.setdefault("signatures", {}).setdefault(uid, {})[key_id] = sig
+        return obj
+
+    master_obj = {
+        "keys": {f"ed25519:{master.public_key}": master.public_key},
+        "usage": ["master"],
+        "user_id": mx.user_id,
+    }
+    ss_obj = {
+        "keys": {f"ed25519:{self_signing.public_key}": self_signing.public_key},
+        "usage": ["self_signing"],
+        "user_id": mx.user_id,
+    }
+    _sign(master, ss_obj, mx.user_id, f"ed25519:{master.public_key}")
+
+    us_obj = {
+        "keys": {f"ed25519:{user_signing.public_key}": user_signing.public_key},
+        "usage": ["user_signing"],
+        "user_id": mx.user_id,
+    }
+    _sign(master, us_obj, mx.user_id, f"ed25519:{master.public_key}")
+
+    body: dict[str, Any] = {
+        "master_key": master_obj,
+        "self_signing_key": ss_obj,
+        "user_signing_key": us_obj,
+    }
+
+    hs = mx.homeserver.rstrip("/")
+    headers = {"Authorization": f"Bearer {mx.access_token}"}
+    client = httpx.Client()
+
+    # Step 1: initiate upload to discover UIA requirements
+    r = client.post(
+        f"{hs}/_matrix/client/v3/keys/device_signing/upload", headers=headers, json=body
+    )
+
+    if r.status_code == 401:
+        data = r.json()
+        session = data.get("session", "")
+        params = data.get("params", {})
+
+        reset_params = params.get("org.matrix.cross_signing_reset", {})
+        reset_url = reset_params.get("url", "")
+
+        if reset_url:
+            click.echo("")
+            click.echo("=" * 60)
+            click.echo("Matrix server requires web approval for cross-signing reset.")
+            click.echo("Open this URL in a browser and approve the reset:")
+            click.echo(f"\n  {reset_url}\n")
+            click.echo("=" * 60)
+            click.echo("")
+            input("Press Enter AFTER you have approved the reset in the browser...")
+
+            body["auth"] = {
+                "type": "org.matrix.cross_signing_reset",
+                "session": session,
+            }
+        else:
+            # Fallback: try password auth
+            password = click.prompt("Matrix account password", hide_input=True)
+            body["auth"] = {
+                "type": "m.login.password",
+                "identifier": {"type": "m.id.user", "user": mx.user_id},
+                "password": password,
+                "session": session,
+            }
+
+        r2 = client.post(
+            f"{hs}/_matrix/client/v3/keys/device_signing/upload",
+            headers=headers,
+            json=body,
+        )
+        if r2.status_code != 200:
+            click.echo(f"✗ Upload failed: {r2.status_code} {r2.text[:300]}", err=True)
+            raise SystemExit(1)
+        click.echo("✓ Cross-signing keys uploaded!")
+
+    elif r.status_code == 200:
+        click.echo("✓ Cross-signing keys uploaded!")
+    else:
+        click.echo(f"✗ Unexpected response: {r.status_code} {r.text[:300]}", err=True)
+        raise SystemExit(1)
+
+    # Step 2: sign our device with the self-signing key
+    r3 = client.post(
+        f"{hs}/_matrix/client/v3/keys/query",
+        headers=headers,
+        json={"device_keys": {mx.user_id: [mx.device_id]}},
+    )
+    dk = r3.json()["device_keys"][mx.user_id][mx.device_id]
+
+    dev_obj = {
+        "algorithms": dk["algorithms"],
+        "device_id": mx.device_id,
+        "keys": dk["keys"],
+        "user_id": mx.user_id,
+    }
+    _sign(self_signing, dev_obj, mx.user_id, f"ed25519:{self_signing.public_key}")
+
+    r4 = client.post(
+        f"{hs}/_matrix/client/v3/keys/signatures/upload",
+        headers=headers,
+        json={mx.user_id: {mx.device_id: dev_obj}},
+    )
+    if r4.status_code == 200:
+        click.echo(f"✓ Device {mx.device_id} cross-signed!")
+        click.echo("  Red warning icons should disappear on new messages.")
+    else:
+        click.echo(
+            f"✗ Signature upload failed: {r4.status_code} {r4.text[:300]}",
+            err=True,
+        )
 
 
 class MatrixPlugin(PykoClawPluginBase):
@@ -132,6 +275,54 @@ class MatrixPlugin(PykoClawPluginBase):
                     await client.close()
 
             asyncio.run(_do_login())
+
+        @matrix.command()
+        def verify() -> None:
+            """Cross-sign the bot's device to remove red warning icons.
+
+            Resets cross-signing keys on the Matrix server and signs the
+            current device.  Matrix.org requires approving the reset via
+            a web browser — the command prints the URL and waits for
+            confirmation.
+
+            Requires PYKOCLAW_MATRIX_ACCESS_TOKEN and
+            PYKOCLAW_MATRIX_DEVICE_ID to be set (run ``login`` first).
+            """
+            from .config import get_config
+
+            mx = get_config()
+            if not mx.access_token or not mx.device_id:
+                click.echo(
+                    "✗ PYKOCLAW_MATRIX_ACCESS_TOKEN and "
+                    "PYKOCLAW_MATRIX_DEVICE_ID must be set.",
+                    err=True,
+                )
+                click.echo(
+                    "  Run 'pykoclaw matrix login' first.",
+                    err=True,
+                )
+                raise SystemExit(1)
+
+            try:
+                import olm.pk  # noqa: F401
+            except ImportError:
+                click.echo(
+                    "✗ python-olm with encryption support is required.",
+                    err=True,
+                )
+                raise SystemExit(1)
+
+            try:
+                from canonicaljson import encode_canonical_json
+            except ImportError:
+                click.echo(
+                    "✗ canonicaljson is required. "
+                    "Install with: uv pip install canonicaljson",
+                    err=True,
+                )
+                raise SystemExit(1)
+
+            _bootstrap_cross_signing(mx, encode_canonical_json)
 
     def get_db_migrations(self) -> list[str]:
         return [
