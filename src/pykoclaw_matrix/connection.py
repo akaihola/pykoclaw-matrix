@@ -35,6 +35,7 @@ from pykoclaw_messaging import dispatch_to_agent
 
 from .config import MatrixSettings, get_config
 from .formatting import build_matrix_content
+from .images import detect_image_paths, mime_for_path
 from .mermaid import extract_mermaid_blocks, render_mermaid_png, strip_mermaid_blocks
 from .handler import (
     BatchAccumulator,
@@ -372,10 +373,14 @@ class MatrixConnection:
     async def _send_message(self, room_id: str, text: str) -> None:
         """Send a formatted message to a Matrix room.
 
-        If *text* contains `````mermaid````` code blocks, each diagram is
-        rendered to PNG, uploaded to the homeserver, and sent as a separate
-        ``m.image`` message after the text.  The Mermaid source is stripped
-        from the text message itself.
+        Handles two kinds of image attachments automatically:
+
+        1. **Mermaid diagrams** — ````` ```mermaid ````` code blocks are
+           rendered to hi-res PNG, uploaded, and sent as ``m.image``.
+           The Mermaid source is stripped from the text message.
+        2. **File references** — absolute paths to image files (PNG, JPEG,
+           etc.) mentioned in the text are detected, read from disk,
+           uploaded, and sent as ``m.image``.
 
         Uses ``ignore_unverified_devices=True`` so that the bot can send
         to E2EE rooms without requiring manual device verification.
@@ -384,17 +389,30 @@ class MatrixConnection:
             log.warning("Cannot send message — client not connected")
             return
         try:
-            # Extract and render Mermaid diagrams (if any).
+            # --- Mermaid diagrams ---
             mermaid_sources = extract_mermaid_blocks(text)
-            rendered_images: list[bytes] = []
+            mermaid_images: list[tuple[bytes, str, str]] = []  # (data, name, mime)
             if mermaid_sources:
-                for src in mermaid_sources:
+                for i, src in enumerate(mermaid_sources, 1):
                     png = await render_mermaid_png(src)
                     if png:
-                        rendered_images.append(png)
+                        mermaid_images.append((png, f"diagram-{i}.png", "image/png"))
 
-            # Send the text (with mermaid blocks stripped if we rendered them).
-            msg_text = strip_mermaid_blocks(text) if rendered_images else text
+            # Strip mermaid blocks from the text if we rendered them.
+            msg_text = strip_mermaid_blocks(text) if mermaid_images else text
+
+            # --- Image file references ---
+            file_images: list[tuple[bytes, str, str]] = []  # (data, name, mime)
+            for path in detect_image_paths(msg_text):
+                try:
+                    data = path.read_bytes()
+                    mime = mime_for_path(path)
+                    file_images.append((data, path.name, mime))
+                    log.info("Read image file: %s (%d bytes)", path, len(data))
+                except Exception:
+                    log.exception("Failed to read image file: %s", path)
+
+            # --- Send text message ---
             if msg_text:
                 content = build_matrix_content(msg_text)
                 await self._client.room_send(
@@ -404,20 +422,26 @@ class MatrixConnection:
                     ignore_unverified_devices=True,
                 )
 
-            # Upload and send each rendered diagram as m.image.
-            for i, png_data in enumerate(rendered_images, 1):
-                await self._send_image(room_id, png_data, f"diagram-{i}.png")
+            # --- Send all images ---
+            for img_data, filename, mime in mermaid_images + file_images:
+                await self._send_image(room_id, img_data, filename, mime)
         except Exception:
             log.exception("Failed to send message to %s", room_id)
 
-    async def _send_image(self, room_id: str, data: bytes, filename: str) -> None:
+    async def _send_image(
+        self,
+        room_id: str,
+        data: bytes,
+        filename: str,
+        content_type: str = "image/png",
+    ) -> None:
         """Upload *data* to the homeserver and send as ``m.image``."""
         if not self._client:
             return
         try:
             resp, _crypto = await self._client.upload(
                 data,
-                content_type="image/png",
+                content_type=content_type,
                 filename=filename,
             )
             if not isinstance(resp, UploadResponse):
@@ -429,7 +453,7 @@ class MatrixConnection:
                 "body": filename,
                 "url": resp.content_uri,
                 "info": {
-                    "mimetype": "image/png",
+                    "mimetype": content_type,
                     "size": len(data),
                 },
             }
