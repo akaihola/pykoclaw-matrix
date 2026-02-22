@@ -289,38 +289,45 @@ class MatrixConnection:
                 f"Decide whether to reply, use tools silently, or do nothing."
             )
 
+            # Show typing indicator while the agent is thinking.
+            await self._set_typing(room_id, True)
             try:
-                result = await dispatch_to_agent(
-                    prompt=prompt,
-                    channel_prefix="matrix",
-                    channel_id=room_id,
-                    db=self._db,
-                    data_dir=core_settings.data,
-                    system_prompt=system_prompt,
-                    extra_mcp_servers=self._extra_mcp_servers,
-                )
-            except Exception:
-                # Session resume can fail if the previous session state is
-                # corrupt or missing.  Clear the conversation and retry
-                # without resuming.
-                log.warning(
-                    "Agent dispatch failed for %s, retrying without session resume",
-                    room_id,
-                )
-                from pykoclaw.db import upsert_conversation
+                try:
+                    result = await dispatch_to_agent(
+                        prompt=prompt,
+                        channel_prefix="matrix",
+                        channel_id=room_id,
+                        db=self._db,
+                        data_dir=core_settings.data,
+                        system_prompt=system_prompt,
+                        extra_mcp_servers=self._extra_mcp_servers,
+                    )
+                except Exception:
+                    # Session resume can fail if the previous session state is
+                    # corrupt or missing.  Clear the conversation and retry
+                    # without resuming.
+                    log.warning(
+                        "Agent dispatch failed for %s, retrying without session resume",
+                        room_id,
+                    )
+                    from pykoclaw.db import upsert_conversation
 
-                conv_name = f"matrix-{room_id}"
-                upsert_conversation(self._db, conv_name, "", str(core_settings.data))
+                    conv_name = f"matrix-{room_id}"
+                    upsert_conversation(
+                        self._db, conv_name, "", str(core_settings.data)
+                    )
 
-                result = await dispatch_to_agent(
-                    prompt=prompt,
-                    channel_prefix="matrix",
-                    channel_id=room_id,
-                    db=self._db,
-                    data_dir=core_settings.data,
-                    system_prompt=system_prompt,
-                    extra_mcp_servers=self._extra_mcp_servers,
-                )
+                    result = await dispatch_to_agent(
+                        prompt=prompt,
+                        channel_prefix="matrix",
+                        channel_id=room_id,
+                        db=self._db,
+                        data_dir=core_settings.data,
+                        system_prompt=system_prompt,
+                        extra_mcp_servers=self._extra_mcp_servers,
+                    )
+            finally:
+                await self._set_typing(room_id, False)
 
             extracted = _extract_reply(result.full_text)
             if extracted:
@@ -334,6 +341,15 @@ class MatrixConnection:
                 update_agent_cursor(self._db, room_id, last_msg_ts)
         except Exception:
             log.exception("Error in agent trigger for %s", room_id)
+
+    async def _set_typing(self, room_id: str, typing: bool) -> None:
+        """Send a typing indicator to a Matrix room."""
+        if not self._client:
+            return
+        try:
+            await self._client.room_typing(room_id, typing)
+        except Exception:
+            log.debug("Failed to send typing indicator to %s", room_id)
 
     async def _send_message(self, room_id: str, text: str) -> None:
         """Send a text message to a Matrix room.
