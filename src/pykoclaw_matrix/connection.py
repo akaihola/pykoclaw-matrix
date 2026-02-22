@@ -35,8 +35,9 @@ from pykoclaw_messaging import dispatch_to_agent
 
 from .config import MatrixSettings, get_config
 from .formatting import build_matrix_content
-from .images import detect_image_paths, mime_for_path
-from .mermaid import extract_mermaid_blocks, render_mermaid_png, strip_mermaid_blocks
+from .images import mime_for_path
+from .mermaid import render_mermaid_png
+from .segments import ImageSegment, TextSegment, split_segments
 from .handler import (
     BatchAccumulator,
     _is_hard_mention,
@@ -384,58 +385,55 @@ class MatrixConnection:
     async def _send_message(self, room_id: str, text: str) -> None:
         """Send a formatted message to a Matrix room.
 
-        Handles two kinds of image attachments automatically:
+        The text is split into interleaved text and image segments so that
+        images appear in the conversation at the point where the agent
+        placed them — not all lumped together after the text.
+
+        Two kinds of images are handled:
 
         1. **Mermaid diagrams** — ````` ```mermaid ````` code blocks are
            rendered to hi-res PNG, uploaded, and sent as ``m.image``.
-           The Mermaid source is stripped from the text message.
         2. **File references** — absolute paths to image files (PNG, JPEG,
-           etc.) mentioned in the text are detected, read from disk,
-           uploaded, and sent as ``m.image``.
-
-        Uses ``ignore_unverified_devices=True`` so that the bot can send
-        to E2EE rooms without requiring manual device verification.
+           etc.) are read from disk, uploaded, and sent as ``m.image``.
         """
+        from pathlib import Path
+
         if not self._client:
             log.warning("Cannot send message — client not connected")
             return
         try:
-            # --- Mermaid diagrams ---
-            mermaid_sources = extract_mermaid_blocks(text)
-            mermaid_images: list[tuple[bytes, str, str]] = []  # (data, name, mime)
-            if mermaid_sources:
-                for i, src in enumerate(mermaid_sources, 1):
-                    png = await render_mermaid_png(src)
-                    if png:
-                        mermaid_images.append((png, f"diagram-{i}.png", "image/png"))
-
-            # Strip mermaid blocks from the text if we rendered them.
-            msg_text = strip_mermaid_blocks(text) if mermaid_images else text
-
-            # --- Image file references ---
-            file_images: list[tuple[bytes, str, str]] = []  # (data, name, mime)
-            for path in detect_image_paths(msg_text):
-                try:
-                    data = path.read_bytes()
-                    mime = mime_for_path(path)
-                    file_images.append((data, path.name, mime))
-                    log.info("Read image file: %s (%d bytes)", path, len(data))
-                except Exception:
-                    log.exception("Failed to read image file: %s", path)
-
-            # --- Send text message ---
-            if msg_text:
-                content = build_matrix_content(msg_text)
-                await self._client.room_send(
-                    room_id,
-                    "m.room.message",
-                    content,
-                    ignore_unverified_devices=True,
-                )
-
-            # --- Send all images ---
-            for img_data, filename, mime in mermaid_images + file_images:
-                await self._send_image(room_id, img_data, filename, mime)
+            segments = split_segments(text)
+            diagram_counter = 0
+            for seg in segments:
+                if isinstance(seg, TextSegment):
+                    content = build_matrix_content(seg.text)
+                    await self._client.room_send(
+                        room_id,
+                        "m.room.message",
+                        content,
+                        ignore_unverified_devices=True,
+                    )
+                elif isinstance(seg, ImageSegment):
+                    ref = seg.ref
+                    if ref.kind == "mermaid":
+                        png = await render_mermaid_png(ref.source)
+                        if png:
+                            diagram_counter += 1
+                            await self._send_image(
+                                room_id,
+                                png,
+                                f"diagram-{diagram_counter}.png",
+                                "image/png",
+                            )
+                    elif ref.kind == "file":
+                        path = Path(ref.source)
+                        try:
+                            data = path.read_bytes()
+                            mime = mime_for_path(path)
+                            log.info("Read image file: %s (%d bytes)", path, len(data))
+                            await self._send_image(room_id, data, path.name, mime)
+                        except Exception:
+                            log.exception("Failed to read image file: %s", path)
         except Exception:
             log.exception("Failed to send message to %s", room_id)
 
