@@ -450,10 +450,13 @@ class MatrixConnection:
         if not self._client:
             return
         try:
+            import io
+
             resp, _crypto = await self._client.upload(
-                data,
+                io.BytesIO(data),
                 content_type=content_type,
                 filename=filename,
+                filesize=len(data),
             )
             if not isinstance(resp, UploadResponse):
                 log.error("Image upload failed: %s", resp)
