@@ -306,7 +306,7 @@ class MatrixConnection:
                     # Session resume can fail if the previous session state is
                     # corrupt or missing.  Clear the conversation and retry
                     # without resuming.
-                    log.warning(
+                    log.exception(
                         "Agent dispatch failed for %s, retrying without session resume",
                         room_id,
                     )

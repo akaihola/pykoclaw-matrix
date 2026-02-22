@@ -33,7 +33,7 @@ def test_register_commands_adds_matrix_group() -> None:
 
 
 def test_matrix_group_has_subcommands() -> None:
-    """Test that matrix group has login, run, and status subcommands."""
+    """Test that matrix group has login, run, and verify subcommands."""
     plugin = MatrixPlugin()
     group = click.Group()
 
@@ -42,7 +42,7 @@ def test_matrix_group_has_subcommands() -> None:
     matrix_group = group.commands["matrix"]
     assert "login" in matrix_group.commands
     assert "run" in matrix_group.commands
-    assert "status" in matrix_group.commands
+    assert "verify" in matrix_group.commands
 
 
 def test_get_db_migrations_returns_valid_sql() -> None:

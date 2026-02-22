@@ -167,6 +167,18 @@ def test_is_hard_mention() -> None:
     assert not _is_hard_mention("Andyman is here", "Andy")
 
 
+def test_is_hard_mention_bare_name() -> None:
+    """Test that bare trigger name as entire message matches."""
+    assert _is_hard_mention("Andy", "Andy")
+    assert _is_hard_mention("andy", "Andy")
+
+
+def test_is_hard_mention_end_of_sentence() -> None:
+    """Test mention after comma and at end of sentence."""
+    assert _is_hard_mention("Hey there, Andy!", "Andy")
+    assert _is_hard_mention("ok, Andy?", "Andy")
+
+
 def test_is_hard_mention_multiple_names() -> None:
     """Verify cache handles different trigger names correctly."""
     assert _is_hard_mention("@Andy check this", "Andy")

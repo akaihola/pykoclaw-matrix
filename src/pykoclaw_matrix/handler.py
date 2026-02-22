@@ -28,9 +28,9 @@ def _build_hard_mention_re(trigger_name: str) -> re.Pattern[str]:
     name = re.escape(trigger_name)
     return re.compile(
         rf"@{name}\b"  # @Andy anywhere
-        rf"|(?:^|(?<=\.\s))"  # start-of-string  OR  after ". "
+        rf"|(?:^|(?<=\.\s)|(?<=,\s))"  # start-of-string, after ". ", or after ", "
         rf"{name}"  # the name itself
-        rf"(?=[\s,:!?])",  # followed by separator
+        rf"(?=[\s,:!?]|$)",  # followed by separator or end-of-string
         re.IGNORECASE,
     )
 
