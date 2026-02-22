@@ -7,9 +7,11 @@ agent trigger pipeline. Modeled after pykoclaw-whatsapp's WhatsAppConnection.
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from textwrap import dedent
 from typing import Any
 
@@ -21,6 +23,7 @@ from nio import (
     MatrixRoom,
     MegolmEvent,
     RoomMessageText,
+    UploadResponse,
 )
 
 from pykoclaw.config import settings as core_settings
@@ -33,6 +36,10 @@ from pykoclaw.db import (
 from pykoclaw_messaging import dispatch_to_agent
 
 from .config import MatrixSettings, get_config
+from .formatting import build_matrix_content
+from .images import mime_for_path
+from .mermaid import render_mermaid_png
+from .segments import ImageSegment, TextSegment, split_segments
 from .handler import (
     BatchAccumulator,
     _is_hard_mention,
@@ -378,23 +385,95 @@ class MatrixConnection:
             log.debug("Failed to send typing indicator to %s", room_id)
 
     async def _send_message(self, room_id: str, text: str) -> None:
-        """Send a text message to a Matrix room.
+        """Send a formatted message to a Matrix room.
 
-        Uses ``ignore_unverified_devices=True`` so that the bot can send
-        to E2EE rooms without requiring manual device verification.
+        The text is split into interleaved text and image segments so that
+        images appear in the conversation at the point where the agent
+        placed them — not all lumped together after the text.
+
+        Two kinds of images are handled:
+
+        1. **Mermaid diagrams** — ````` ```mermaid ````` code blocks are
+           rendered to hi-res PNG, uploaded, and sent as ``m.image``.
+        2. **File references** — absolute paths to image files (PNG, JPEG,
+           etc.) are read from disk, uploaded, and sent as ``m.image``.
         """
         if not self._client:
             log.warning("Cannot send message — client not connected")
             return
         try:
+            segments = split_segments(text)
+            diagram_counter = 0
+            for seg in segments:
+                if isinstance(seg, TextSegment):
+                    content = build_matrix_content(seg.text)
+                    await self._client.room_send(
+                        room_id,
+                        "m.room.message",
+                        content,
+                        ignore_unverified_devices=True,
+                    )
+                elif isinstance(seg, ImageSegment):
+                    ref = seg.ref
+                    if ref.kind == "mermaid":
+                        png = await render_mermaid_png(ref.source)
+                        if png:
+                            diagram_counter += 1
+                            await self._send_image(
+                                room_id,
+                                png,
+                                f"diagram-{diagram_counter}.png",
+                                "image/png",
+                            )
+                    elif ref.kind == "file":
+                        path = Path(ref.source)
+                        try:
+                            data = path.read_bytes()
+                            mime = mime_for_path(path)
+                            log.info("Read image file: %s (%d bytes)", path, len(data))
+                            await self._send_image(room_id, data, path.name, mime)
+                        except Exception:
+                            log.exception("Failed to read image file: %s", path)
+        except Exception:
+            log.exception("Failed to send message to %s", room_id)
+
+    async def _send_image(
+        self,
+        room_id: str,
+        data: bytes,
+        filename: str,
+        content_type: str = "image/png",
+    ) -> None:
+        """Upload *data* to the homeserver and send as ``m.image``."""
+        try:
+            resp, _crypto = await self._client.upload(
+                io.BytesIO(data),
+                content_type=content_type,
+                filename=filename,
+                filesize=len(data),
+            )
+            if not isinstance(resp, UploadResponse):
+                log.error("Image upload failed: %s", resp)
+                return
+
+            content = {
+                "msgtype": "m.image",
+                "body": filename,
+                "url": resp.content_uri,
+                "info": {
+                    "mimetype": content_type,
+                    "size": len(data),
+                },
+            }
             await self._client.room_send(
                 room_id,
                 "m.room.message",
-                {"msgtype": "m.text", "body": text},
+                content,
                 ignore_unverified_devices=True,
             )
+            log.info("Sent image %s to %s (%s)", filename, room_id, resp.content_uri)
         except Exception:
-            log.exception("Failed to send message to %s", room_id)
+            log.exception("Failed to send image to %s", room_id)
 
     async def _delivery_poll_loop(self) -> None:
         """Poll and deliver scheduled task results to Matrix rooms."""
