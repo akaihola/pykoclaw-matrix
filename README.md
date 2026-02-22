@@ -5,10 +5,16 @@ agent to Matrix rooms via the [matrix-nio][nio] library.
 
 ## Features
 
+- **End-to-end encryption** — full E2EE support for encrypted rooms via
+  libolm/matrix-nio.
 - **Ambient listening** — the agent monitors Matrix rooms and only replies when
   directly mentioned or in DMs.
+- **Typing indicator** — shows "user is typing…" in Element while the agent
+  processes a message.
 - **Batch accumulation** — groups rapid messages into a single agent prompt
-  (configurable window).
+  (configurable window). DMs and direct mentions flush immediately.
+- **Cross-signing** — built-in `verify` command bootstraps cross-signing so
+  the bot's messages don't show red "unverified" warnings in Element.
 - **Auto-join** — automatically joins rooms when invited (configurable).
 - **Delivery queue** — scheduled task results are delivered via the standard
   pykoclaw delivery queue.
@@ -41,7 +47,17 @@ PYKOCLAW_MATRIX_DEVICE_ID=ABCDEFGHIJ
 PYKOCLAW_MATRIX_TRIGGER_NAME=Andy
 ```
 
-### 4. Run
+### 4. Cross-sign the device (recommended)
+
+```bash
+pykoclaw matrix verify
+```
+
+This bootstraps cross-signing keys so the bot's messages don't show red
+"unverified device" warnings in Element. On matrix.org, you'll be prompted
+to approve the reset via a browser URL.
+
+### 5. Run
 
 ```bash
 pykoclaw matrix run
