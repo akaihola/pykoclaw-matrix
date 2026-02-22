@@ -445,8 +445,6 @@ class MatrixConnection:
         content_type: str = "image/png",
     ) -> None:
         """Upload *data* to the homeserver and send as ``m.image``."""
-        if not self._client:
-            return
         try:
             resp, _crypto = await self._client.upload(
                 io.BytesIO(data),
