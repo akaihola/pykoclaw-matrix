@@ -161,10 +161,18 @@ class MatrixConnection:
 
             # Skip old messages from initial sync
             if self._sync_start_time and timestamp < self._sync_start_time:
+                log.debug("Skipping old message from %s (ts=%s)", sender, timestamp)
                 return
 
             room_id = room.room_id
             display_name = room.user_name(sender) or sender
+
+            log.info(
+                "Message in %s from %s: %s",
+                room_id,
+                display_name,
+                text[:120],
+            )
 
             store_message(
                 self._db,
@@ -176,8 +184,19 @@ class MatrixConnection:
             )
             update_room_timestamp(self._db, room_id, timestamp)
 
-            is_dm = room.member_count == 2 and not room.is_group
+            # DM detection: a room with only 2 members (us + them).
+            # NOTE: matrix-nio's is_group means "unnamed room" (the opposite
+            # of what you'd expect) — DMs are typically unnamed, so is_group
+            # is True for DMs. We rely solely on member_count.
+            is_dm = room.member_count <= 2
             is_hard_mention = _is_hard_mention(text, self._config.trigger_name)
+
+            log.info(
+                "Trigger check: is_dm=%s, is_hard_mention=%s, members=%d",
+                is_dm,
+                is_hard_mention,
+                room.member_count,
+            )
 
             if is_dm or is_hard_mention:
                 await self._batch_accumulator.flush_now(room_id)

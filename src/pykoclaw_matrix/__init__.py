@@ -25,6 +25,13 @@ class MatrixPlugin(PykoClawPluginBase):
         @matrix.command()
         def run() -> None:
             """Run Matrix message listener."""
+            import logging
+
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s %(name)s %(levelname)s %(message)s",
+            )
+
             from pykoclaw.config import settings
             from pykoclaw.db import init_db
             from pykoclaw.plugins import run_db_migrations
