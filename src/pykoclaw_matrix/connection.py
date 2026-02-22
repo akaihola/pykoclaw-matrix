@@ -228,7 +228,9 @@ class MatrixConnection:
             )
 
             if is_dm or is_hard_mention:
-                await self._batch_accumulator.flush_now(room_id)
+                await self._batch_accumulator.flush_now(
+                    room_id, hard_mention=is_hard_mention or is_dm
+                )
             else:
                 await self._batch_accumulator.add(room_id)
         except Exception:
@@ -284,10 +286,19 @@ class MatrixConnection:
                 room_id, hard_mention=hard_mention
             )
 
-            prompt = (
-                f"New message batch from Matrix room:\n\n{xml_context}\n\n"
-                f"Decide whether to reply, use tools silently, or do nothing."
-            )
+            prompt_parts = [
+                f"New message batch from Matrix room:\n\n{xml_context}",
+            ]
+            if hard_mention:
+                prompt_parts.append(
+                    "You were directly addressed by name in this batch — "
+                    "you MUST reply using `<reply>` tags."
+                )
+            else:
+                prompt_parts.append(
+                    "Decide whether to reply, use tools silently, or do nothing."
+                )
+            prompt = "\n\n".join(prompt_parts)
 
             # Show typing indicator while the agent is thinking.
             await self._set_typing(room_id, True)

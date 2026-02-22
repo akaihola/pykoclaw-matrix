@@ -87,11 +87,11 @@ class BatchAccumulator:
             )
             self._timers[room_id] = handle
 
-    async def flush_now(self, room_id: str) -> None:
+    async def flush_now(self, room_id: str, *, hard_mention: bool = True) -> None:
         """Immediately flush *room_id*'s batch (hard mention / DM)."""
         if room_id in self._timers:
             self._timers.pop(room_id).cancel()
-        await self._do_flush(room_id, hard_mention=True)
+        await self._do_flush(room_id, hard_mention=hard_mention)
 
     async def _timer_expired(self, room_id: str) -> None:
         self._timers.pop(room_id, None)
