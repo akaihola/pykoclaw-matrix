@@ -319,6 +319,7 @@ class MatrixConnection:
                         data_dir=core_settings.data,
                         system_prompt=system_prompt,
                         extra_mcp_servers=self._extra_mcp_servers,
+                        include_partial_messages=False,
                     )
                 except Exception:
                     # Session resume can fail if the previous session state is
@@ -343,6 +344,7 @@ class MatrixConnection:
                         data_dir=core_settings.data,
                         system_prompt=system_prompt,
                         extra_mcp_servers=self._extra_mcp_servers,
+                        include_partial_messages=False,
                     )
             finally:
                 await self._set_typing(room_id, False)
