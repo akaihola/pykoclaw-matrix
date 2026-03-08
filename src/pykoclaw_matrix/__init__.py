@@ -190,6 +190,7 @@ class MatrixPlugin(PykoClawPluginBase):
             from pykoclaw.config import settings
             from pykoclaw.db import init_db
             from pykoclaw.plugins import (
+                compose_system_prompt_additions,
                 compose_transformers,
                 load_plugins,
                 run_db_migrations,
@@ -248,6 +249,7 @@ class MatrixPlugin(PykoClawPluginBase):
                 db=db,
                 extra_mcp_servers=mcp_servers,
                 response_transformer=response_transformer,
+                system_prompt_addition=compose_system_prompt_additions(all_plugins),
             )
             conn.run()
 

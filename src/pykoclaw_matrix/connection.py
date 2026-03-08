@@ -90,11 +90,13 @@ class MatrixConnection:
         config: MatrixSettings | None = None,
         extra_mcp_servers: dict[str, Any] | None = None,
         response_transformer: Callable[[str], str] | None = None,
+        system_prompt_addition: str | None = None,
     ) -> None:
         self._config = config or get_config()
         self._db = db
         self._extra_mcp_servers = extra_mcp_servers or {}
         self._response_transformer = response_transformer
+        self._system_prompt_addition = system_prompt_addition
         self._client: AsyncClient | None = None
         self._batch_accumulator: BatchAccumulator | None = None
         self._self_user_id: str = ""
@@ -279,6 +281,8 @@ class MatrixConnection:
                 "\n\nThis batch contains a direct @mention of your name "
                 "— you MUST reply to it using `<reply>` tags."
             )
+        if self._system_prompt_addition:
+            base += "\n\n" + self._system_prompt_addition
         return base
 
     async def _handle_agent_trigger(
