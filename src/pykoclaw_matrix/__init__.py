@@ -344,18 +344,11 @@ class MatrixPlugin(PykoClawPluginBase):
         ]
 
     def native_file_extensions(self) -> frozenset[str]:
-        return frozenset(
-            {
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".gif",
-                ".webp",
-                ".svg",
-                ".bmp",
-                ".tiff",
-            }
-        )
+        # Matrix cannot read local files — it needs HTTP URLs.
+        # Return empty so pykofinder rewrites image links to pykofinder URLs
+        # (e.g. https://gogo.crane-boa.ts.net:8445/w/...) instead of leaving
+        # them as absolute local paths that Matrix cannot serve.
+        return frozenset()
 
     def get_config_class(self) -> type[BaseSettings] | None:
         return MatrixSettings
