@@ -16,7 +16,7 @@ from nio import AsyncClient, LoginError
 from pydantic_settings import BaseSettings
 
 from pykoclaw.db import DbConnection, enqueue_delivery
-from pykoclaw.plugins import PykoClawPluginBase
+from pykoclaw.plugins import PykoClawPluginBase, TransformContext
 
 from .config import MatrixSettings, get_config
 
@@ -189,7 +189,11 @@ class MatrixPlugin(PykoClawPluginBase):
 
             from pykoclaw.config import settings
             from pykoclaw.db import init_db
-            from pykoclaw.plugins import run_db_migrations
+            from pykoclaw.plugins import (
+                compose_transformers,
+                load_plugins,
+                run_db_migrations,
+            )
 
             from .connection import MatrixConnection
 
@@ -197,7 +201,15 @@ class MatrixPlugin(PykoClawPluginBase):
             db.execute("PRAGMA journal_mode=WAL")
 
             plugin = MatrixPlugin()
-            run_db_migrations(db, [plugin])
+            all_plugins = load_plugins()
+            run_db_migrations(db, all_plugins)
+            response_transformer = compose_transformers(
+                all_plugins,
+                TransformContext(
+                    channel_prefix="matrix",
+                    native_file_extensions=plugin.native_file_extensions(),
+                ),
+            )
 
             mcp_servers = plugin.get_mcp_servers(db, "matrix")
 
@@ -232,7 +244,11 @@ class MatrixPlugin(PykoClawPluginBase):
             click.echo(f"User ID:        {mx_config.user_id}")
             click.echo(f"Trigger name:   {mx_config.trigger_name}")
 
-            conn = MatrixConnection(db=db, extra_mcp_servers=mcp_servers)
+            conn = MatrixConnection(
+                db=db,
+                extra_mcp_servers=mcp_servers,
+                response_transformer=response_transformer,
+            )
             conn.run()
 
         @matrix.command()
@@ -324,6 +340,20 @@ class MatrixPlugin(PykoClawPluginBase):
                     last_agent_timestamp TEXT
                 )"""),
         ]
+
+    def native_file_extensions(self) -> frozenset[str]:
+        return frozenset(
+            {
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".gif",
+                ".webp",
+                ".svg",
+                ".bmp",
+                ".tiff",
+            }
+        )
 
     def get_config_class(self) -> type[BaseSettings] | None:
         return MatrixSettings

@@ -183,3 +183,26 @@ class TestSplitSegments:
         assert len(result) == 1
         assert isinstance(result[0], ImageSegment)
         assert result[0].ref.kind == "mermaid"
+
+    def test_markdown_image_url(self) -> None:
+        url = "https://example.com/plot.png"
+        text = f"Before\n\n![plot]({url})\n\nAfter"
+        result = split_segments(text)
+        assert len(result) == 3
+        assert isinstance(result[0], TextSegment)
+        assert isinstance(result[1], ImageSegment)
+        assert result[1].ref.kind == "url"
+        assert result[1].ref.source == url
+        assert isinstance(result[2], TextSegment)
+
+    def test_markdown_image_url_inside_mermaid_not_duplicated(self) -> None:
+        url = "https://example.com/plot.png"
+        text = dedent(f"""\
+            ```mermaid
+            graph TD
+              A["![plot]({url})"]-->B
+            ```""")
+        result = split_segments(text)
+        assert len(result) == 1
+        assert isinstance(result[0], ImageSegment)
+        assert result[0].ref.kind == "mermaid"

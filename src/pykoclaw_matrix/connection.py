@@ -10,14 +10,17 @@ import asyncio
 import io
 import logging
 import re
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from textwrap import dedent
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from nio import (
     AsyncClient,
-    ClientConfig,
+    AsyncClientConfig,
     InviteMemberEvent,
     LoginError,
     MatrixRoom,
@@ -37,9 +40,6 @@ from pykoclaw_messaging import dispatch_to_agent
 
 from .config import MatrixSettings, get_config
 from .formatting import build_matrix_content
-from .images import mime_for_path
-from .mermaid import render_mermaid_png
-from .segments import ImageSegment, TextSegment, split_segments
 from .handler import (
     BatchAccumulator,
     _is_hard_mention,
@@ -49,6 +49,9 @@ from .handler import (
     update_agent_cursor,
     update_room_timestamp,
 )
+from .images import mime_for_path, mime_for_url
+from .mermaid import render_mermaid_png
+from .segments import ImageSegment, TextSegment, split_segments
 
 log = logging.getLogger(__name__)
 
@@ -86,10 +89,12 @@ class MatrixConnection:
         db: DbConnection,
         config: MatrixSettings | None = None,
         extra_mcp_servers: dict[str, Any] | None = None,
+        response_transformer: Callable[[str], str] | None = None,
     ) -> None:
         self._config = config or get_config()
         self._db = db
         self._extra_mcp_servers = extra_mcp_servers or {}
+        self._response_transformer = response_transformer
         self._client: AsyncClient | None = None
         self._batch_accumulator: BatchAccumulator | None = None
         self._self_user_id: str = ""
@@ -104,7 +109,7 @@ class MatrixConnection:
         cfg = self._config
         cfg.store_path.mkdir(parents=True, exist_ok=True)
 
-        nio_config = ClientConfig(store_sync_tokens=True)
+        nio_config = AsyncClientConfig(store_sync_tokens=True)
         client = AsyncClient(
             cfg.homeserver,
             cfg.user_id,
@@ -307,6 +312,8 @@ class MatrixConnection:
                 )
             prompt = "\n\n".join(prompt_parts)
 
+            transformer = getattr(self, "_response_transformer", None)
+
             # Show typing indicator while the agent is thinking.
             await self._set_typing(room_id, True)
             try:
@@ -320,10 +327,11 @@ class MatrixConnection:
                         system_prompt=system_prompt,
                         extra_mcp_servers=self._extra_mcp_servers,
                         include_partial_messages=False,
+                        response_transformer=transformer,
                     )
                 except Exception:
                     # Session resume can fail if the previous session state is
-                    # corrupt or missing.  Clear the conversation and retry
+                    # corrupt or missing. Clear the conversation and retry
                     # without resuming.
                     log.exception(
                         "Agent dispatch failed for %s, retrying without session resume",
@@ -345,6 +353,7 @@ class MatrixConnection:
                         system_prompt=system_prompt,
                         extra_mcp_servers=self._extra_mcp_servers,
                         include_partial_messages=False,
+                        response_transformer=transformer,
                     )
             finally:
                 await self._set_typing(room_id, False)
@@ -354,7 +363,7 @@ class MatrixConnection:
                 await self._send_message(room_id, extracted)
 
                 # Store the agent's response locally so it survives session
-                # resume failures.  Without this, a failed resume loses all
+                # resume failures. Without this, a failed resume loses all
                 # prior agent replies and the XML context only contains human
                 # messages.
                 now = datetime.now(timezone.utc).isoformat()
@@ -399,6 +408,8 @@ class MatrixConnection:
            rendered to hi-res PNG, uploaded, and sent as ``m.image``.
         2. **File references** — absolute paths to image files (PNG, JPEG,
            etc.) are read from disk, uploaded, and sent as ``m.image``.
+        3. **URL references** — Markdown HTTP image URLs are downloaded,
+           uploaded, and sent as ``m.image``.
         """
         if not self._client:
             log.warning("Cannot send message — client not connected")
@@ -436,6 +447,11 @@ class MatrixConnection:
                             await self._send_image(room_id, data, path.name, mime)
                         except Exception:
                             log.exception("Failed to read image file: %s", path)
+                    elif ref.kind == "url":
+                        try:
+                            await self._send_image_url(room_id, ref.source)
+                        except Exception:
+                            log.exception("Failed to send image URL: %s", ref.source)
         except Exception:
             log.exception("Failed to send message to %s", room_id)
 
@@ -447,8 +463,12 @@ class MatrixConnection:
         content_type: str = "image/png",
     ) -> None:
         """Upload *data* to the homeserver and send as ``m.image``."""
+        client = self._client
+        if client is None:
+            log.warning("Cannot send image — client not connected")
+            return
         try:
-            resp, _crypto = await self._client.upload(
+            resp, _crypto = await client.upload(
                 io.BytesIO(data),
                 content_type=content_type,
                 filename=filename,
@@ -467,7 +487,7 @@ class MatrixConnection:
                     "size": len(data),
                 },
             }
-            await self._client.room_send(
+            await client.room_send(
                 room_id,
                 "m.room.message",
                 content,
@@ -476,6 +496,19 @@ class MatrixConnection:
             log.info("Sent image %s to %s (%s)", filename, room_id, resp.content_uri)
         except Exception:
             log.exception("Failed to send image to %s", room_id)
+
+    async def _send_image_url(
+        self, room_id: str, url: str, caption: str | None = None
+    ) -> None:
+        """Download and send a remote image via Matrix."""
+        del caption
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, timeout=10.0)
+            response.raise_for_status()
+            data = response.content
+
+        filename = Path(urlparse(url).path).name or "image"
+        await self._send_image(room_id, data, filename, mime_for_url(url))
 
     async def _delivery_poll_loop(self) -> None:
         """Poll and deliver scheduled task results to Matrix rooms."""

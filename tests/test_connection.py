@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import sqlite3
 from textwrap import dedent
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from nio import UploadResponse
@@ -226,3 +226,35 @@ async def test_send_image_passes_bytesio_to_upload() -> None:
     assert content["msgtype"] == "m.image"
     assert content["url"] == "mxc://example.com/abc123"
     assert content["info"]["size"] == len(png_data)
+
+
+@pytest.mark.asyncio
+async def test_send_image_url_downloads_and_uploads() -> None:
+    fake_upload_resp = UploadResponse.from_dict(
+        {"content_uri": "mxc://example.com/urlimg"}
+    )
+
+    conn = MatrixConnection.__new__(MatrixConnection)
+    conn._client = AsyncMock()
+    conn._client.upload = AsyncMock(return_value=(fake_upload_resp, None))
+    conn._client.room_send = AsyncMock()
+
+    response = Mock()
+    response.content = b"PNGDATA"
+    response.raise_for_status = Mock()
+
+    async_client = AsyncMock()
+    async_client.get = AsyncMock(return_value=response)
+    async_client.__aenter__.return_value = async_client
+    async_client.__aexit__.return_value = None
+
+    with patch(
+        "pykoclaw_matrix.connection.httpx.AsyncClient", return_value=async_client
+    ):
+        await conn._send_image_url("!room:test", "https://example.com/chart.png")
+
+    conn._client.upload.assert_called_once()
+    upload_args = conn._client.upload.call_args
+    assert upload_args[1]["filename"] == "chart.png"
+    assert upload_args[1]["content_type"] == "image/png"
+    conn._client.room_send.assert_called_once()
