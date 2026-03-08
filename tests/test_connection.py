@@ -108,6 +108,7 @@ async def test_handle_agent_trigger_stores_reply(matrix_db: sqlite3.Connection) 
     conn._config = type("C", (), {"trigger_name": "Tyko"})()
     conn._extra_mcp_servers = {}
     conn._client = AsyncMock()
+    conn._system_prompt_addition = None
 
     with (
         patch(
@@ -155,6 +156,7 @@ async def test_agent_reply_appears_in_next_batch(matrix_db: sqlite3.Connection) 
     conn._config = type("C", (), {"trigger_name": "Tyko"})()
     conn._extra_mcp_servers = {}
     conn._client = AsyncMock()
+    conn._system_prompt_addition = None
 
     with (
         patch(
@@ -258,3 +260,55 @@ async def test_send_image_url_downloads_and_uploads() -> None:
     assert upload_args[1]["filename"] == "chart.png"
     assert upload_args[1]["content_type"] == "image/png"
     conn._client.room_send.assert_called_once()
+
+
+# --- system_prompt_addition tests ---
+
+
+def test_matrix_system_prompt_addition_appended(
+    matrix_db: sqlite3.Connection,
+) -> None:
+    """system_prompt_addition is appended to the built system prompt."""
+    from pykoclaw_matrix.config import MatrixSettings
+
+    conn = MatrixConnection.__new__(MatrixConnection)
+    conn._config = MatrixSettings.model_construct(trigger_name="Tyko")
+    conn._system_prompt_addition = "Always use full paths like `docs/note.md`."
+
+    prompt = conn._build_system_prompt("!room:test", hard_mention=False)
+    assert "Always use full paths like" in prompt
+
+
+def test_matrix_system_prompt_addition_none_unchanged(
+    matrix_db: sqlite3.Connection,
+) -> None:
+    """When system_prompt_addition is None, the prompt equals the base."""
+    from pykoclaw_matrix.config import MatrixSettings
+
+    conn_none = MatrixConnection.__new__(MatrixConnection)
+    conn_none._config = MatrixSettings.model_construct(trigger_name="Tyko")
+    conn_none._system_prompt_addition = None
+
+    conn_base = MatrixConnection.__new__(MatrixConnection)
+    conn_base._config = MatrixSettings.model_construct(trigger_name="Tyko")
+    conn_base._system_prompt_addition = None
+
+    room_id = "!room:test"
+    assert conn_none._build_system_prompt(
+        room_id, hard_mention=False
+    ) == conn_base._build_system_prompt(room_id, hard_mention=False)
+
+
+def test_matrix_system_prompt_addition_with_hard_mention(
+    matrix_db: sqlite3.Connection,
+) -> None:
+    """system_prompt_addition is present even when hard_mention=True."""
+    from pykoclaw_matrix.config import MatrixSettings
+
+    conn = MatrixConnection.__new__(MatrixConnection)
+    conn._config = MatrixSettings.model_construct(trigger_name="Tyko")
+    conn._system_prompt_addition = "Instruction from plugin."
+
+    prompt = conn._build_system_prompt("!room:test", hard_mention=True)
+    assert "Instruction from plugin." in prompt
+    assert "MUST reply" in prompt  # hard-mention block is also present
