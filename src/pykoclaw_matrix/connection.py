@@ -33,6 +33,7 @@ from pykoclaw.config import settings as core_settings
 from pykoclaw.db import (
     DbConnection,
     get_pending_deliveries,
+    init_db,
     mark_delivered,
     mark_delivery_failed,
 )
@@ -101,6 +102,7 @@ class MatrixConnection:
         self._batch_accumulator: BatchAccumulator | None = None
         self._self_user_id: str = ""
         self._sync_start_time: str = ""
+        self._extra_dbs: list[DbConnection] = []
 
     async def _login(self) -> AsyncClient:
         """Create and authenticate the Matrix client.
@@ -527,9 +529,41 @@ class MatrixConnection:
         except asyncio.CancelledError:
             log.info("Delivery polling stopped")
 
+    def _get_all_delivery_dbs(self) -> list[DbConnection]:
+        """Return all DBs that may contain pending matrix deliveries.
+
+        Includes the primary DB plus any extra agent DBs configured via
+        :pydata:`~pykoclaw_matrix.config.MatrixSettings.extra_db_paths`
+        (env var ``PYKOCLAW_MATRIX_EXTRA_DB_PATHS``).
+
+        This enables cross-agent delivery: an agent without its own Matrix
+        connection (e.g. Ressu/pipsa) can enqueue ``channel_prefix='matrix'``
+        deliveries in *its* DB, and this Matrix service will pick them up
+        and send them using its bot account.  Mirrors the multi-DB pattern
+        already used by the WhatsApp connection
+        (``WhatsAppConnection._get_all_delivery_dbs``).
+
+        Extra DBs are opened lazily on first call.
+        """
+        if not self._extra_dbs and self._config.extra_db_paths:
+            for db_path in self._config.extra_db_paths:
+                if db_path.exists():
+                    extra = init_db(db_path)
+                    extra.execute("PRAGMA journal_mode=WAL")
+                    self._extra_dbs.append(extra)
+                    log.info("Opened extra delivery DB: %s", db_path)
+                else:
+                    log.warning("Extra DB path does not exist: %s", db_path)
+        return [self._db, *self._extra_dbs]
+
     async def _process_pending_deliveries(self) -> None:
         """Deliver pending messages from the delivery queue."""
-        pending = get_pending_deliveries(self._db, "matrix")
+        for db in self._get_all_delivery_dbs():
+            await self._process_deliveries_from_db(db)
+
+    async def _process_deliveries_from_db(self, db: DbConnection) -> None:
+        """Process pending matrix deliveries from a single database."""
+        pending = get_pending_deliveries(db, "matrix")
         if not pending:
             return
 
@@ -537,10 +571,10 @@ class MatrixConnection:
             room_id = delivery.conversation.removeprefix("matrix-")
             try:
                 await self._send_message(room_id, delivery.message)
-                mark_delivered(self._db, delivery.id)
+                mark_delivered(db, delivery.id)
                 log.info("Delivered task result to %s", room_id)
             except Exception:
-                mark_delivery_failed(self._db, delivery.id, "send failed")
+                mark_delivery_failed(db, delivery.id, "send failed")
                 log.exception("Failed to deliver to %s", room_id)
 
     async def run_async(self) -> None:

@@ -37,6 +37,18 @@ class MatrixSettings(BaseSettings):
     trigger_name: str = Field(default="Andy")
     batch_window_seconds: int = Field(default=90)
     auto_join: bool = Field(default=True)
+    extra_db_paths: list[Path] = Field(
+        default_factory=list,
+        description=(
+            "Additional pykoclaw.db paths to poll for ``channel_prefix='matrix'`` "
+            "delivery queue entries.  This lets agents that don't have their own "
+            "Matrix connection send messages via *this* service's bot account.  "
+            "Example: ``PYKOCLAW_MATRIX_EXTRA_DB_PATHS="
+            '\'["/home/agent/pipsa/pykoclaw.db"]\' '
+            "allows Ressu (pipsa) to deliver scheduled task results to Matrix "
+            "rooms through Tyko's ``@tyko-agent:matrix.org`` connection."
+        ),
+    )
 
     model_config = {
         "env_prefix": "PYKOCLAW_MATRIX_",
