@@ -570,7 +570,10 @@ class MatrixConnection:
         for delivery in pending:
             room_id = delivery.conversation.removeprefix("matrix-")
             try:
-                await self._send_message(room_id, delivery.message)
+                message = delivery.message
+                if self._response_transformer is not None:
+                    message = self._response_transformer(message)
+                await self._send_message(room_id, message)
                 mark_delivered(db, delivery.id)
                 log.info("Delivered task result to %s", room_id)
             except Exception:

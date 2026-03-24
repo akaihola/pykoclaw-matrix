@@ -312,3 +312,69 @@ def test_matrix_system_prompt_addition_with_hard_mention(
     prompt = conn._build_system_prompt("!room:test", hard_mention=True)
     assert "Instruction from plugin." in prompt
     assert "MUST reply" in prompt  # hard-mention block is also present
+
+
+# -- Delivery queue: response_transformer must be applied ------------------
+
+
+@pytest.mark.asyncio
+async def test_delivery_queue_applies_response_transformer(
+    matrix_db: sqlite3.Connection,
+) -> None:
+    """response_transformer must be applied to queued delivery messages.
+
+    Regression test: queued deliveries bypassed the transformer, so relative
+    Markdown links like [label](relative/path.md) were sent as-is instead of
+    being rewritten to Pykofinder URLs.
+    """
+    # Seed a delivery with a relative-path Markdown link
+    matrix_db.execute(
+        dedent("""\
+            CREATE TABLE IF NOT EXISTS delivery_queue (
+                id TEXT PRIMARY KEY,
+                task_id TEXT NOT NULL,
+                task_run_log_id INTEGER,
+                conversation TEXT NOT NULL,
+                channel_prefix TEXT NOT NULL,
+                message TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                delivered_at TEXT
+            )""")
+    )
+    matrix_db.execute(
+        dedent("""\
+            INSERT INTO delivery_queue
+                (id, task_id, conversation, channel_prefix, message, status, created_at)
+            VALUES ('d1', 'task-1', 'matrix-!room:test', 'matrix',
+                    'Report: [claw trends diary](journals/2026/claw-trends-diary.md)',
+                    'pending', '2026-03-23T10:20:00+00:00')""")
+    )
+    matrix_db.commit()
+
+    sent_texts: list[str] = []
+
+    conn = MatrixConnection.__new__(MatrixConnection)
+    conn._db = matrix_db
+    conn._config = type("C", (), {"trigger_name": "Tyko"})()
+    conn._extra_dbs: list = []
+    conn._config.extra_db_paths = []
+    conn._response_transformer = lambda text: text.replace(
+        "[claw trends diary](journals/2026/claw-trends-diary.md)",
+        "[claw trends diary](https://pykofinder.example.com/f/my-knowledge/journals/2026/claw-trends-diary.md)",
+    )
+
+    async def fake_send_message(room_id: str, text: str) -> None:
+        sent_texts.append(text)
+
+    conn._send_message = fake_send_message  # type: ignore[method-assign]
+
+    await conn._process_deliveries_from_db(matrix_db)
+
+    assert len(sent_texts) == 1, f"Expected 1 sent message, got {len(sent_texts)}"
+    assert "https://pykofinder.example.com/f/my-knowledge/" in sent_texts[0], (
+        f"Transformer not applied; sent: {sent_texts[0]!r}"
+    )
+    assert "journals/2026/claw-trends-diary.md" not in sent_texts[0].split(
+        "https://pykofinder.example.com"
+    )[0], "Raw relative path still present before the URL"
